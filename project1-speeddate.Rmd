@@ -1,0 +1,382 @@
+---
+title: "Formula for Good First Impressions"
+author: "Adam Lininger-White"
+date: "4/7/2020"
+output: pdf_document
+---
+
+```{r, setup, include = FALSE}
+# Initialization stuff 
+
+# Require the necessary packages
+require(dplyr)
+require(ggplot2)
+require(tidyverse)
+require(glmnet)
+require(MASS)
+require(ggcorrplot)
+require(EnvStats)
+```
+
+```{r, tidying data, include= FALSE}
+# Read and clean data 
+
+# Read the data from the csv file 
+df <- read.csv("./simple-dating-data.csv")
+
+# Remove additional variables that are irrelevant or have poorly formatted
+# information and can't be used for regression
+df.numeric <- df %>% filter(complete.cases(df %>% dplyr::select(dec:met))) %>% dplyr::select(-(3:5))
+
+# Key:
+#   gender: 0 = female, 1 = male
+#   met:    1 = met before, 2 = strangers
+#   dec:    0 = no, 1 = yes
+#   prob:   do you think the other person wanted to match? (1 = not likely, 10 = definitely)
+#   shar:   shared interests 
+
+# some reordering of our data
+df.numeric <- df.numeric %>% dplyr::select(dec, like, everything()) %>%
+  dplyr::select(-gender, -age, everything(), gender, age)
+
+# boiling it down to the final predictors that we'll use for regression
+df.final <- df.numeric %>% dplyr::select(2:9, 12) %>% filter(like > 0)
+df.final <- df.final[-c(5053, 5902, 6394),] # removing problematic outliers 
+
+```
+
+## I INTRODUCTION
+	
+First impressions are tricky, some are strong while others are awkward but most are exceedingly average.  Yet we all know somebody who makes a great first impression on everyone they meet.  These blessed individuals are effortlessly charming and endearing while also making strangers feel good about themselves.  In his classic book on interpersonal relations \textit{How to Win Friends and Influence People}, Dale Carnegie argues that this skill is the greatest determinant of professional achievement and a fulfilling life.  Masters of the first impression rule the world.  I want to know what about these people makes us like them so much, and I found the beginnings of an answer in statistical analyses of speed dating.
+
+Researchers at the Columbia Business School had a similar question to mine.  They wanted to understand what constituted a good first impression in the world of romantic relationships.  After each speed date, they measured how well the interaction went using a binary, categorical response variable: “Would you like to see this subject again, yes or no?”  Participants scored each partner on several attributes and provided information about themselves in a pre-experiment survey.  Using this data, researchers built linear regression models and analyzed their coefficients to determine which attributes were most important for instilling interest and leaving a good impression.
+
+Two separate studies utilized this dataset, and both clustered subjects into groups before building models in order to analyze differences in attribute importance.  One study found that women put greater weight on the intelligence and race of their partner, while men respond more to physical attractiveness [Fisman et al., 2006].  Moreover, men do not value women’s intelligence or ambition when it exceeds their own.  They also found that women exhibit a preference for men who grew up in affluent neighborhoods.  The second study found that subjects’ backgrounds, including the racial composition of the ZIP code where a subject grew up and the prevailing racial attitudes in a subject’s state or country of origin, strongly influence same-race preferences [Iyengar et al., 2008].
+
+In this paper, I perform a similar analysis with the main difference that I predict a subject's general fondness for their partner rather than their romantic interest - how much they \textit{like} the stranger across the table as a person.  To my luck, the Columbia researchers tracked this exact variable but never used it for model building or analysis.  I performed linear regression to predict such fondness and found: (1) attractiveness is the most important determinant, (2) overlapping interests and perceived funness are tied for second, (3) belief the other person likes you is somewhat important, (4) intelligence and sincerity are equally important but relatively not very impactful, and (4) ambition has an insignificantly negative impact.  
+\vspace{-.5cm}
+\begin{align*}
+  \textrm{Like}_{ij} &= (0.30)\:\textrm{Attractive}_{ij} + (0.20)\:\textrm{Fun}_{ij} + (0.20) \:\textrm{Shared Interests}_{ij} + (0.12)\:\textrm{P(partner is interested)}_{ij} \\ &+ (0.09)\:\textrm{Sincerity}_{ij} + (0.08)\:\textrm{Intelligence}_{ij} + (-0.02)\:\textrm{Ambition}_{ij} + \epsilon_{ij}
+\end{align*}
+* subscripts indicate the score person $i$ gave to person $j$ on a particular attribute. 
+
+The remainder of the paper is structured as follows.  Section II describes the data used for model building and how it was collected.  It also briefly addresses assumptions about the data and drawbacks that limit the scope of my results.  Section III outlines how the final model was selected, analyzes its appropriateness, and uses it to answer interesting questions and address pieces of conventional wisdom.  Section IV concludes.
+
+
+## II METHODOLOGY
+
+Data collection for the Columbia Speed Dating Experiment took place between 2002-2004.  Subjects were drawn from students in graduate and professional schools at Columbia University and were recruited through a combination of mass email and fliers posted throughout the campus and handed out by research assistants.  The speed dating events occurred in a popular restaurant near campus, and factors like lighting, table arrangement, and music taste and volume were constant across sessions. Upon arrival, participants received a clipboard, pen, and nametag with their unique ID number. Each clipboard included a score-card with a cover over it so that participants’ responses would remain confidential. The score-card was divided into columns in which participants indicated the ID number of each person they met. Participants would then circle “yes” or “no” under the ID number to indicate whether they wanted to see the other person again. Beneath the Yes/No decision was a listing of the six attributes on which the participant had to rate his or her partner on a 1–10 Likert scale: Attractive, Sincere, Intelligent, Fun, Ambitious, Shared Interests Following these attributes were two full questions also answered with scores between 1-10: "Overall, how much do you like this person? (1=not at all, 10=a lot)" and "How probable do you think it is that this person will say 'yes' for you? (1=not probable, 10=extremely probable)" [Iyengar et al., 2008].
+
+At the start of each session, hosts asked participants to sit at two person tables with all women on one side and men on the other.  Each speed date lasted four minutes with one addional minute at the end to answer survey questions, then each man rotated until they'd met all the women.  
+
+By combining partner ratings with pre-experiment survey responses, researchers were able to create rich profiles for both participants in every speed date.  All in all, the final dataset measured 195 variables across nearly 7000 dates.  I found it messy and overwhelming.  Other data scientists agreed and several published cleaned, simplified versions on open-source online platforms.  I’m using one created by Keith McNulty, accessed via his GitHub linked [here](https://github.com/keithmcnulty/speed_dating).  All salient variables from the original dataset were retained, as well as some less important ones. 
+
+```{r}
+head(df)
+```
+
+I did some extra cleaning by removing the \emph{income}, \emph{goal}, and \emph{career} variables because they mostly contained missing or inconsistently formatted data. I chose to remove \emph{gender} when building my full model so that I could analyze the broadest, most universal ideal of a good first impression.  One couldn't adopt a different demeanor for the umpteen combinations of a stranger's identity categories, so my model gives the best option if only one choice is available.  Later, in my data analysis section, I reintroduce the \emph{gender} variable and compare coefficients between genders. 
+
+```{r}
+names(df.final)
+```
+
+Our response variable is the general fondness score \emph{like}, which is continuous between 1 and 10 (inclusive) with higher values indicating greater fondness.  Variables two through six are continuous over the same range and indicate how each attribute impacted the subject's overall impression (1 = awful, 10 = great).  \emph{Prob} is the survey filler's guess at the probability their partner is interested in them (1 = not likely, 10 = definitely). Almost all ratings were given in whole numbers, but some participants gave fractional scores.
+
+Scores for each speed date were given confidentially, and participants never had the opportunity to discuss their rating systems with one another during the session.  We can reasonably assume that the outcome of one speed date did not impact data for other dates, so the cases in this experiment satisfy the assumption of independence between errors.  There are, however, issues in the data we must address.  Subjects voluntarily chose to participate in this study and were not randomly selected from the population. This undermines the representativeness of our sample, and makes it unclear how broadly our results apply.  Looking at the demographic breakdown of participants, we see a diverse set of greographical, socioeconomic, racial, and academic backgrounds represented.  This makes us more confident in the strength of the results, but recognizing that all participants are Columbia University students diminishes it again.  All this is to say that the scope where my conclusions are relevant is difficult to define. They certainly apply to Columbia University students, and probably all enrollees at elite academic institutions, but I don't think they can be generalized to all young adults.  
+
+I also worried that this study only analyzed relationships between people of the opposite sex, which would be a woefully incomplete dataset for my purposes. Thankfully, the Columbia researchers were wise enough to conduct additional speed dating trials where all participants identified as either male or female. This information allows me to generalize my results to almost all interactions between two people. I lament the lack of data for folks who identify as non-binary. They are not represented, which again limits the scope of my results and analysis. 
+
+## III Data Analysis. 
+
+In this section, I first outline how I arrive at my final model before using it to draw interesting conclusions and comparing different models between groups. Full code for all model building, model comparisons, graphics, and subsequent prediction can be found in this project's GitHub [repository](LINK TO GITHUB!!!).
+
+```{r, manual ascent, include = FALSE}
+# 1) Build model using manual ascent algorithm 
+
+# A copy of our data which we'll use specifically for ascent model building
+df.ascent <- df.final
+
+# fun has strongest correlation so we fit 
+# cor(df.ascent)
+fit1 <- lm(like~0+fun, df.ascent) 
+df.ascent$res1 <- resid(fit1)
+
+# Add attractiveness to the model
+# cor(df.ascent)
+fit2 <- lm(like~0+fun+attr, df.ascent)
+# Check for difference between full and reduced 
+anova(fit1, fit2)
+# Small p-value means we prefer the full model, so add residuals again
+df.ascent$res2 <- resid(fit2)
+
+# Add probability that partner likes you to model
+# cor(df.ascent)
+fit3 <- lm(like~0+fun+attr+prob, df.ascent)
+anova(fit2, fit3)
+df.ascent$res3 <- resid(fit3)
+
+#Add shared interests to model
+# cor(df.ascent)
+fit4 <- lm(like~0+fun+attr+prob+shar, df.ascent)
+anova(fit3, fit4)
+df.ascent$res4 <- resid(fit4)
+
+# Add sincerity to model
+# cor(df.ascent)
+fit5 <- lm(like~0+fun+attr+prob+shar+sinc, df.ascent)
+anova(fit4, fit5)
+df.ascent$res5 <- resid(fit5)
+
+# Add inteligence to model 
+# cor(df.ascent)
+fit6 <- lm(like~0+fun+attr+prob+shar+sinc+intel, df.ascent)
+anova(fit5, fit6)
+df.ascent$res6 <- resid(fit6)
+
+# Attempt to add ambition, but ANOVA favors our reduced model
+# cor(df.ascent)
+fit7 <- lm(formula = like ~ 0 + (attr + sinc + intel + fun + amb + shar + 
+    prob), df.ascent)
+anova(fit6, fit7) # p-value significant so we add to the model
+
+# Our final model is the last reduced model we tried 
+fit.ascent <- fit7
+
+#----------------------------------------------------------------
+
+# 2) Build model using AIC 
+df.AIC <- df.final[,-9] # Remove gender variable
+fit.AIC <- step(lm(like~0 + ., df.AIC))
+
+#----------------------------------------------------------------
+
+# 3) Build model using the LASSO
+
+set.seed(4232) # make results reproducible 
+
+# create a copy of our dataframe for model building with LASSO
+df.LASSO <- df.final
+
+# fit a model using glmnet w/ LASSO 
+y <- df.LASSO$like
+x <- as.matrix(df.LASSO[,-c(1,9)]) #remove response & gender
+fit.LASSO <- glmnet(x, y,alpha = 1)
+plot(fit.LASSO, label=TRUE) # plot the model
+
+# use cross-validation to find the best level of lambda 
+cv1 <- cv.glmnet(x,y,alpha=1)
+plot(cv1) # plot the results of our CV 
+
+# Coefficients for the sparse model
+betas  <- coef(fit.LASSO, s = cv1$lambda.1se, exact = TRUE)
+
+# predict the overall "like" rating
+df.LASSO$yhat <- betas[1] + (betas[2] * df.LASSO$attr) + 
+  (betas[3] * df.LASSO$sinc) +
+  (betas[4] * df.LASSO$intel) +
+  (betas[5] * df.LASSO$fun) +
+  (betas[7] * df.LASSO$shar) +
+  (betas[8] * df.LASSO$prob)
+
+# compute the residuals 
+df.LASSO$res <- df.LASSO$like - df.LASSO$yhat 
+
+# Plot the fitted values against the residuals 
+ggplot(data = df.LASSO, aes(x = yhat, y = res)) + 
+  geom_point(alpha = .5, position = position_jitter(.0, 0, seed = 4232))
+
+
+# Choose the manual ascent model as our final
+final.model <- fit.ascent
+```
+
+At the outset, I knew only that I wanted to perform regression through the origin - if a person recieves a zero for every attribute, then their overall rating should be zero.  I decided to fit a model with three different techniques (maunal ascent, AIC backward selection, and LASSO), then compare their relative merits and choose one to fully implement.  My job became easier when the manual ascent algorithm and automated AIC procedue returned the same model: both told me to regress on all available predictors.  Using the glmnet package and its built in functions for LASSO, I found that $\lambda \approx .113$ produced the sparsest model whose standard error was still similar to the most accurate model.  LASSO removed one variable \textit{amb} from the set of utilized predictors; it's coefficient is almost zero in the full model.  All three models had very similar coefficients, as shown below. 
+
+```{r, model comparison, echo = FALSE}
+# Compare coefficients 
+model.comp <- data.frame(rbind(round(fit.ascent$coefficients, 3),
+                               round(fit.AIC$coefficients, 3),
+                               round(betas[-1,], 3)))
+model.comp <- data.frame(c("Ascent", "AIC", "LASSO"), model.comp)
+names(model.comp) <- c("", names(model.comp)[-1])
+model.comp
+```
+
+I compared the residual plots for the full model and LASSO model and noticed no visually significant difference, so I elected to use the bigger model proposed by AIC and manual ascent (two votes to one majority).  When building my model with the manual ascent procedure, I added predictors in the following order (from first to last): \textit{fun, attr, prob, shar, sinc, intel, amb.}
+
+Now that we understand where the final model comes from, we must answer the question, "Is a linear model appropriate for this prediction task?"   To do so, we must prove the assumptions of linearity, constant variance, and normality of errors are true for our data.  Looking at a scatter plot of residuals against fitted values, the $e_{ij}$'s appear evenly and randomly distributed for the middle portion of our predictions, but these assumptions get more suspect towards the tails. The same is true for the normal probability plot - the middle region closely tracks with the line but the ends slightly diverge. A reasonable explanation justifies these patterns: values of the \textit{like} variable are restricted to the interval $[1,10]$, so smaller $\hat{y}_i$'s are more likely to underpredict and have bigger residuals while bigger $\hat{y}_i$'s will tend to overpredict and have smaller residuals. Also, the vast majority of observations exist in the middle section of our residual plot, so it makes sense that the vertical spread over this region would be slightly larger.  With these realizations in mind, it's reasonable to conclude that the response variable, fondness, is linear with constant variance and normal distribution of error terms. I considered a Box-Cox power transformation of the response variable but found it only weakly strengthened these assumptions, and the loss in interpretability outweight any gains. 
+
+```{r, resid plot, echo = FALSE}
+# Plot the fitted values versus residuals 
+yhat <- predict(final.model)
+resid <- df.ascent$like - yhat
+ggplot(data.frame(yhat, resid), aes(x = yhat, y = resid)) +
+  geom_point(alpha = .3, position = position_jitter(w=.5, h=0, seed = 4232))
+```
+
+
+```{r, normal prob plot, include= FALSE}
+fondness.stdres <- rstandard(final.model)
+qqnorm(fondness.stdres)
+qqline(fondness.stdres)
+```
+
+```{r, boxcox, include = FALSE}
+# Consider a transformation of our y variable
+plot(boxcox(fit.ascent))
+# Find the optimal value of lambda
+lambda <- boxcox(fit.ascent, optimize = TRUE)$lambda 
+# Transform the response variable and fit a new model
+df.ascent$like.bc <- boxcoxTransform(df.ascent$like, lambda) 
+fit.ascent.bc <- lm(like.bc~fun+attr+prob+shar+sinc+intel, df.ascent)
+
+# Compare plots for the two models to determine which is better
+plot(fit.ascent)
+plot(fit.ascent.bc)
+
+# Decide to use the untransformed model because 
+#   (1) the residuals are more homoskedastic 
+#   (2) the normal probability plot is only slightly less linear
+#   (3) The residuals vs. leverage graph is better
+#   (4) Occam's Razor: simpler model is better!
+
+```
+
+
+```{r, corr matrix, include = FALSE}
+# Plot a correlation matrix heat map for the data frame
+corr <- round(cor(df.ascent), 1)
+ggcorrplot(corr, type = "upper", outline.col = "white", 
+           ggtheme = ggplot2::theme_gray, lab = TRUE, 
+           colors = c("#6D9EC1", "white", "#E46726"))
+
+```
+
+So we've seen the final model, know how it was built, and know it's appropriate for predicting how much a grad student will like someone they just met given a scoring of the stranger's attributes. Now, it's time to peek under the hood and see how these attributes determine fondness. As a refresher, here's another look at the model: 
+\vspace{-.2cm}
+\begin{align*}
+  \textrm{Like}_{ij} &= (0.30)\:\textrm{Attractive}_{ij} + (0.20)\:\textrm{Fun}_{ij} + (0.20) \:\textrm{Shared Interests}_{ij} + (0.12)\:\textrm{P(partner is interested)}_{ij} \\ &+ (0.09)\:\textrm{Sincerity}_{ij} + (0.08)\:\textrm{Intelligence}_{ij} + (-0.02)\:\textrm{Ambition}_{ij} + \epsilon_{ij}
+\end{align*}
+What jumps out immediately is the outsized role that three attributes play in determining $\textrm{Like}_{ij}$.  Attractiveness is 1.5x more important than the second most significant predictors (funness and shared interests), which are nearly twice as powerful as the next closest variable.  With scores of 10 for these three attributes and zeros in all others, one would recieve a fondness score of 7/10 - not bad at all.  Thus, these are the keys for making a good impression.  Sadly, this doesn't help much if one is looking for ways to improve.  Maybe we can slightly improve our physical appearances by exercising regularly and dressing well, but good looks really aren't in our control. Same goes for sharing interests, assuming both partners are being genuine, one can actively look for common ground but may find none exists. So, instead of focusing on the most important predictors, let's concentrate on attributes we can control. Specifically, let's find the ones with greatest potential for improvement (on average). 
+
+First, let's consider the nonexistest, perfectly average person in our study. 
+
+```{r, improving1,echo=FALSE}
+# Find the mean value for each attribute
+means <- c("0")
+for (i in 1:8) {
+  means <- data.frame(means, mean(df.final[,i]))
+}
+means <- means[, -1]
+names(means) <- names(df.final)[c(1:8)]
+means
+```
+
+If person $j$ wants to improve the overall likeability score person $i$ gives then, he or she could realistically focus on being more vivacious (\textit{fun}), genuine and honest (\textit{sinc}), eager to talk about complicated topics (\textit{intel}), and outwardly friendly towards their partner (\textit{prob}).  I've chosen to ignore \textit{amb} because its barely nonzero, and I never want to be on the side of tellig people to limit their ambitions.  Our question is, "For the average person, which of these attributes should we maximize to provide the biggest bump in likeability?" To start, we augment the perfectly average subject by replacing one of their attributes with a 10, predicting their new likeability score (CI), then setting the attribute back to its mean before flipping another and repeating. After, we compare all the newly predicted \textit{like} scores and see which are greatest. 
+
+```{r, improving2, echo=FALSE}
+mean.fun <- means
+mean.fun[1,5] <- 10
+mean.sinc <- means
+mean.sinc[1,3] <- 10
+mean.intel <- means
+mean.intel[1,4] <- 10
+mean.prob <- means
+mean.prob[1,8] <- 10
+improve <- rbind(predict(final.model, mean.fun, interval = 'confidence'),
+                 predict(final.model, mean.sinc, interval = 'confidence'),
+                 predict(final.model, mean.intel, interval = 'confidence'),
+                 predict(final.model, mean.prob, interval = 'confidence'))
+improve <- data.frame(c("Max fun", "Max sinc", "Max intel", "Max prob"), improve)
+names(improve) <- c("Variable", names(improve)[c(2:4)])
+improve
+```
+
+One major cause of good first impressions is luck, getting dealt a good hand of cards. In terms of attributes one can actually work on to improve their interactions with strangers, the following are clear takeaways: (1) try hard to relate to new people and build a mutual sense of understanding, (2) bring energy and positivity to these interactions, and (3) show more friendliness and affection than normal. 
+
+In the Columbia Business School studies, researchers found differences in attribute importance for mate selection across categories like race and gender.  Naturally, one might wonder whether disparities exist between these groups for predicting general fondness as well.  To answer these quetions, we split subjects into groups based on some facet of their identity, build separate linear models for each group, and compare their coefficients.  For simplicity, I used glmnet's LASSO to build the following models and derive their $\beta$ coefficients.  Stark differences exist between the attributes valued by men and women.  Attractiveness remains the strongest determinant for both groups, but it also has the biggest difference in betas; its impact on men is far greater than the next closest variable, but women consider characteristics like funness and shared interests to be nearly as significant. Other noteworthy differences exist between intelligence and sincerity, both of which have stronger effects in women. Interestingly, the second biggest difference in betas occurs for \textit{prob}, the probability the other person likes you, which men respond to more strongly than women. 
+
+```{r, men vs. women, echo=FALSE}
+# Compare model coefficients for men vs. women
+df.gender <-  df.numeric %>% dplyr::select(-1, -10, -12)
+
+df.male <- df.gender %>% filter(gender == 1)
+y.male <- df.male$like
+x.male <- as.matrix(df.male[,-c(1, 9)])
+fit.LASSO.male <- glmnet(x.male, y.male, alpha = 1)
+cv.male <- cv.glmnet(x.male, y.male, alpha=1)
+betas.male <- coef(fit.LASSO.male, s = cv.male$lambda.1se, exact = TRUE) 
+
+df.female <- df.gender %>% filter(gender == 0)
+y.female <- df.female$like
+x.female <- as.matrix(df.female[,-c(1,9)])
+fit.LASSO.female <- glmnet(x.female, y.female, alpha = 1)
+cv.female <- cv.glmnet(x.female, y.female, alpha=1)
+betas.female <- coef(fit.LASSO.female, s = cv.female$lambda.1se, exact = TRUE) 
+
+bmdf <- as.data.frame(summary(betas.male))
+bfdf <- as.data.frame(summary(betas.female))
+var <- c("intercept","attr", "sinc", "intel", "fun", "shar", "prob")
+beta.comp <- data.frame(var, bmdf$x, bfdf$x)
+names(beta.comp) <- c("Variable", "Beta-Male", "Beta-Female")
+beta.comp$`Beta-Male` <- round(beta.comp$`Beta-Male`, 3)
+beta.comp$`Beta-Female` <- round(beta.comp$`Beta-Female`, 3)
+beta.comp[-1, ]
+
+```
+
+I performed a similar analysis for age, pulling the oldest and youngest quartiles of participants into separate groups before fitting models using LASSO. The printout below shows the resulting coefficients for each model. We see that younger grad students are more impacted by attractiveness and shared interests, while their older counterparts respond to funness and sense of reciprocated interest. 
+```{r, age, echo=FALSE}
+# Compare model coefficients for older vs. younger subjects. 
+df.age <- df.numeric %>% dplyr::select(-1, -10, -11)
+
+df.old <- df.age %>% filter(age > 28)
+y.old <- df.old$like
+x.old <- as.matrix(df.old[, -c(1,9)])
+fit.LASSO.old <- glmnet(x.old, y.old, alpha = 1)
+cv.old <- cv.glmnet(x.old, y.old, alpha = 1)
+betas.old <- coef(cv.old, s="lambda.1se")
+
+df.young <-df.age %>% filter(age < 24)
+y.young <- df.young$like
+x.young <- as.matrix(df.young[, -c(1,9)])
+fit.LASSO.young <- glmnet(x.young, y.young, alpha = 1)
+cv.young <- cv.glmnet(x.young, y.young, alpha = 1)
+betas.young <- coef(cv.young, s="lambda.1se")
+
+
+bo <- as.data.frame(summary(betas.old))
+by <- as.data.frame(summary(betas.young))
+boy <- data.frame(var, bo$x, by$x)
+names(boy) <- c("Variable", "Beta-old", "Beta-young")
+boy$`Beta-old` <- round(boy$`Beta-old`, 3)
+boy$`Beta-young` <- round(boy$`Beta-young`, 3)
+boy[-1,]
+```
+
+\newpage
+
+We also might want to know more about the instances in our dataset where someobdy made a really good first impression. What combination of attributes were displayed, on average, when a participant recieved a 9 or 10 for the \textit{like} variable? Below is a printout of the mean score for each attribute when this was was the case. Interestingly, the predictors sincerity and intelligence, which didn't have large coefficients in the final model, have the highest average scores. This indicates that people who make good first impressions in the real world, usually are very genuine and bright. Hopefully, that redeems some faith that humans aren't as superficial as our other analysis suggests. Another seemingly strange feature of this printout is that the mean scores are all $<9$ even though the \textit{like} score is $\geq 9$. Again, this is because scores are bounded above by 10 so the distribution for a given attribute will be skewed down. 
+
+```{r, perfect, echo = FALSE}
+perfect.df <- df.final %>% dplyr::select(-age) %>% filter(like >= 9)
+perfect.mean <- c()
+perfect.median <- c()
+for (i in 1:8) {
+  perfect.mean <- cbind(perfect.mean, mean(perfect.df[, i]))
+  perfect.median <- cbind(perfect.median, median(perfect.df[,i]))
+}
+perfect <- data.frame(c("Mean", "Median"), rbind(perfect.mean, perfect.median))
+names(perfect) <- c("Center Measure", names(perfect.df))
+perfect[, -2]
+```
+
+
+## IV CONCLUSION
+
+If someone makes a good first impression on you, it may be difficult to put into words why you like them - maybe you'll call it a "gut feeling."  In building my model, I wanted to peek into society's collective subconcious and determine the biggest factors in leaving a good first impression.  I utilized a dataset compiled by a Columbia Business School study of speed dating that had datapoints for both same sex and opposite sex interactions.  I did not separate subjects into groups before building my final model because I wanted to know what attributes are most important across interactions between all of people.  
+
+I find that two of the strongest predictors of a good impression, attractiveness and shared interests, are somewhat out of one's control.  For the predictors one can affect, the average person can most improve their average likeability across all interactions with strangers by maximizing their energy/poisitivity and their outward friendliness towards the person.  While it's impossible to create commonality where none exists, trying hard to find shared interests with new acquaintances is a great strategy for leaving good impressions.  Subgroups of the population place different values on attributes when determining their fondness for an unfamiliar person.  Men respond more positively to attractiveness and reciprocated interest than women, who place higher value on funness and common ground.  Younger grad students react more strongly to shared interests than older grad students, but surprisingly the opposite is true for funness. While intelligence and sincerity didn't have large coefficients in our final model, these were the percieved best attributes, on average, of people who made a good first impression in the study.
+
+These results apply to graduate school students at elite academic institutions, but everyone should be interested in the numbers behind likeability. Improving one's interpersonal skills can be a gateway to greater happiness and professional success. 
